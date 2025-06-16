@@ -6,10 +6,11 @@ from PIL import Image
 import io
 import os
 from prediction_service import PredictionService
+from disease_detection_service import DiseaseDetectionService
 
 app = FastAPI(
     title="Bitki Tanıma API",
-    description="Görsellerden bitki türünü tanıyan REST API",
+    description="Görsellerden bitki türünü ve hastalığını tanıyan REST API",
     version="1.0.0"
 )
 
@@ -22,7 +23,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 MODEL_PATH = os.environ.get("MODEL_PATH", "plant_recognition_model.h5")
 LABELS_PATH = os.environ.get("LABELS_PATH", "labels.txt")
 
@@ -33,6 +33,13 @@ except FileNotFoundError as e:
     print(f"UYARI: {str(e)}")
     print("API çalışmaya devam edecek ancak tahmin endpoint'i çalışmayacak.")
     prediction_service = None
+
+# Bitki hastalığı tespiti servisi
+try:
+    disease_detection_service = DiseaseDetectionService()
+except Exception as e:
+    print(f"UYARI: Hastalık tespit modeli yüklenemedi: {str(e)}")
+    disease_detection_service = None
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -144,8 +151,8 @@ async def root():
         <div class=\"card\">
             <div class=\"logo\">🌱</div>
             <h1>Bitki Tanıma API</h1>
-            <p>Yapay zeka destekli bu API, yüklediğiniz görseldeki bitki türünü otomatik olarak tanır.<br><br>
-            <b>Kullanım için:</b> <span class=\"endpoint\">POST /predict/</span> endpointine bir görsel yükleyin.</p>
+            <p>Yapay zeka destekli bu API, yüklediğiniz görseldeki bitki türünü ve hastalığını otomatik olarak tanır.<br><br>
+            <b>Kullanım için:</b> <span class=\"endpoint\">POST /predict/</span> veya <span class=\"endpoint\">POST /predict-disease/</span> endpointine bir görsel yükleyin.</p>
             <div class=\"links\">
                 <a href=\"/docs\">Swagger Dokümantasyonu</a>
                 <a href=\"https://github.com/mehmetakifkucukkaya/plant_recognition_API\" target=\"_blank\">GitHub</a>
@@ -157,39 +164,55 @@ async def root():
     """
 
 @app.post("/predict/", 
-         summary="Bitki görseli yükleyerek tahmin yapma",
+         summary="Bitki görseli yükleyerek tür tahmini yapma",
          description="Yüklenen görselden bitki türünü tahmin eder ve güven oranını döndürür.")
 async def predict_plant(image: UploadFile = File(...)):
-    # Model yüklü değilse hata ver
     if prediction_service is None:
         raise HTTPException(
             status_code=503,
             detail="Model yüklenemedi. Lütfen sistem yöneticisiyle iletişime geçin."
         )
-        
-    # Dosya formatını kontrol et
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(
             status_code=400, 
             detail="Sadece JPEG veya PNG formatındaki görseller kabul edilmektedir."
         )
-    
     try:
-        # Görsel içeriğini oku
         contents = await image.read()
-        
-        # Bytes'tan PIL Image'a dönüştürme
         img = Image.open(io.BytesIO(contents))
-        
-        # Tahmin yap
         prediction, confidence = prediction_service.predict(img)
-        
-        # Sonuç döndür
         return {
             "predicted_class": prediction,
             "confidence": float(confidence)
         }
-        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Tahmin sırasında bir hata oluştu: {str(e)}"
+        )
+
+@app.post("/predict-disease/", 
+         summary="Bitki görseli yükleyerek hastalık tahmini yapma",
+         description="Yüklenen görselden bitki hastalığını tahmin eder ve güven oranını döndürür.")
+async def predict_disease(image: UploadFile = File(...)):
+    if disease_detection_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Hastalık tespit modeli yüklenemedi. Lütfen sistem yöneticisiyle iletişime geçin."
+        )
+    if image.content_type not in ["image/jpeg", "image/png"]:
+        raise HTTPException(
+            status_code=400, 
+            detail="Sadece JPEG veya PNG formatındaki görseller kabul edilmektedir."
+        )
+    try:
+        contents = await image.read()
+        img = Image.open(io.BytesIO(contents))
+        prediction, confidence = disease_detection_service.predict(img)
+        return {
+            "predicted_disease": prediction,
+            "confidence": float(confidence)
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
